@@ -77,6 +77,10 @@ struct lock {
         HANGMAN_LOCKABLE(lk_hangman);   /* Deadlock detector hook. */
         // add what you need here
         // (don't forget to mark things volatile as needed)
+	struct semaphore *sem;
+	char *who_holds_lock;
+	struct spinlock name_lock;
+	
 };
 
 struct lock *lock_create(const char *name);
