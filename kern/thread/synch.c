@@ -157,12 +157,14 @@ lock_create(const char *name)
 	HANGMAN_LOCKABLEINIT(&lock->lk_hangman, lock->lk_name);
 
 	// add stuff here as needed
-	lock->sem = sem_create(name, 1);
-	if (lock->sem == NULL){
-		kfree(lock->sem);
-		return NULL;		
+	lock->chan = wchan_create(name);
+	if (lock->chan == NULL){
+		kfree(lock->lk_name);
+		kfree(lock);
+		return NULL;	
 	}
-	
+	spinlock_init(&lock->lk_lock);
+	lock->count = 1;
 	lock->lock_holder = NULL;
 	return lock;
 }
@@ -180,7 +182,8 @@ lock_destroy(struct lock *lock)
 	}
 
 	kfree(lock->lk_name);
-	sem_destroy(lock->sem);
+	spinlock_cleanup(&lock->lk_lock);
+	wchan_destroy(lock->chan);
 	lock->lock_holder = NULL;	
 	kfree(lock);
 }
@@ -196,12 +199,16 @@ lock_acquire(struct lock *lock)
 	if (lock->lock_holder == curthread){
 		panic("Deadlock on lock: %p", lock);
 	}
-		
-	P(lock->sem);
 	
+	spinlock_acquire(&lock->lk_lock);
+	while(lock->count==0){
+		wchan_sleep(lock->chan, &lock->lk_lock);
+	}
+	KASSERT(lock->count > 0);
+	lock->count--;
 	lock->lock_holder = curthread;
+	spinlock_release(&lock->lk_lock);
 	//(void)lock;  // suppress warning until code gets written
-
 	/* Call this (atomically) once the lock is acquired */
 	HANGMAN_ACQUIRE(&curthread->t_hangman, &lock->lk_hangman);
 }
@@ -215,12 +222,14 @@ lock_release(struct lock *lock)
 	
 	if (lock->lock_holder != curthread){
 		panic("You're trying to release a lock you don't hold\n");
-	}
-
+	}	
+	
+	spinlock_acquire(&lock->lk_lock);	
+	lock->count++;
+	KASSERT(lock->count > 0);
 	lock->lock_holder = NULL;
-
-	V(lock->sem);
-
+	wchan_wakeone(lock->chan, &lock->lk_lock);
+	spinlock_release(&lock->lk_lock);			
 	HANGMAN_RELEASE(&curthread->t_hangman, &lock->lk_hangman);
 	// Write this
 
