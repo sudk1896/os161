@@ -163,10 +163,7 @@ lock_create(const char *name)
 		return NULL;		
 	}
 	
-	lock->who_holds_lock = NULL;
-
-	spinlock_init(&lock->name_lock);
-
+	lock->lock_holder = NULL;
 	return lock;
 }
 
@@ -176,32 +173,33 @@ lock_destroy(struct lock *lock)
 	KASSERT(lock != NULL);
 
 	// add stuff here as needed
+	// Nobody should hold the lock when it is destroyed.
+	
+	if (lock->lock_holder != NULL){
+		panic("some thread holds this lock\n");
+	}
 
 	kfree(lock->lk_name);
 	sem_destroy(lock->sem);
-	kfree(lock->who_holds_lock);
-	spinlock_cleanup(&lock->name_lock);	
+	lock->lock_holder = NULL;	
 	kfree(lock);
 }
 
 void
 lock_acquire(struct lock *lock)
 {
-	/* Call this (atomically) before waiting for a lock */
+	/* Call this (atomically) before waiting for a lock */	
 	HANGMAN_WAIT(&curthread->t_hangman, &lock->lk_hangman);
 
 	// Write this
-	
 	KASSERT(lock != NULL);
-
-	char* tmp = kmalloc(strlen(curthread->t_name)+1);
-	strcpy(tmp, curthread->t_name);
-
+	if (lock->lock_holder == curthread){
+		panic("Deadlock on lock: %p", lock);
+	}
+		
 	P(lock->sem);
 	
-	spinlock_acquire(&lock->name_lock);
-	lock->who_holds_lock = tmp;
-	spinlock_release(&lock->name_lock);
+	lock->lock_holder = curthread;
 	//(void)lock;  // suppress warning until code gets written
 
 	/* Call this (atomically) once the lock is acquired */
@@ -211,18 +209,19 @@ lock_acquire(struct lock *lock)
 void
 lock_release(struct lock *lock)
 {
-	/* Call this (atomically) when the lock is released */
-	
+	/* Call this (atomically) when the lock is released */	
+	/* Only the thread that holds the lock can release it.*/	
 	KASSERT(lock != NULL);
+	
+	if (lock->lock_holder != curthread){
+		panic("You're trying to release a lock you don't hold\n");
+	}
+
+	lock->lock_holder = NULL;
 
 	V(lock->sem);
 
-	spinlock_acquire(&lock->name_lock);
-	kfree(lock->who_holds_lock);
-	spinlock_release(&lock->name_lock);
-
 	HANGMAN_RELEASE(&curthread->t_hangman, &lock->lk_hangman);
-
 	// Write this
 
 	//(void)lock;  // suppress warning until code gets written
@@ -233,20 +232,9 @@ lock_do_i_hold(struct lock *lock)
 {
 	// Write this
 	
-	char *tmp = kmalloc(strlen(curthread->t_name)+1); 
-	strcpy(tmp, curthread->t_name);
+	KASSERT(lock != NULL);
 	
-	kprintf("Current thread is %s\n", curthread->t_name);
-	//kprintf("thread holding lock is %s", lock->who_holds_lock);
-
-	spinlock_acquire(&lock->name_lock);	
-	if (lock->who_holds_lock != NULL && 
-		strcmp(lock->who_holds_lock, tmp) == 0){
-		spinlock_release(&lock->name_lock);
-		return true;
-	}
-	spinlock_release(&lock->name_lock);
-	return false;
+	return (lock->lock_holder == curthread);
 	//(void)lock;  // suppress warning until code gets written
 
 	//return true; // dummy until code gets written
